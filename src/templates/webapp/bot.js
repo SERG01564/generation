@@ -1,9 +1,11 @@
-import { Telegraf, session } from 'telegraf';
-import { message } from 'telegraf/filters';
-import dotenv from 'dotenv';
+import { Telegraf } from 'telegraf';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs-extra';
+import archiver from 'archiver';
+import dotenv from 'dotenv';
+import cors from 'cors';
 
 dotenv.config();
 
@@ -12,66 +14,82 @@ const app = express();
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // Middleware
+app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Используем сессии для хранения состояния
-bot.use(session());
+// API endpoint для генерации бота
+app.post('/api/generate', async (req, res) => {
+    try {
+        const { botType, botName, botToken, openaiKey } = req.body;
 
-// Обработка команды /start
-bot.command('start', async (ctx) => {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: 'Открыть форму', web_app: { url: process.env.WEBAPP_URL } }]
-    ]
-  };
-  
-  await ctx.reply(
-    'Добро пожаловать! 👋\n\n' +
-    'Нажмите кнопку ниже, чтобы открыть форму:',
-    { reply_markup: keyboard }
-  );
+        // Создаем временную директорию для проекта
+        const tempDir = path.join(__dirname, 'temp', botName);
+        await fs.ensureDir(tempDir);
+
+        // Копируем шаблон
+        const templateDir = path.join(__dirname, '..', '..', 'templates', botType);
+        await fs.copy(templateDir, tempDir);
+
+        // Создаем .env файл
+        const envContent = `BOT_TOKEN=${botToken}\n`;
+        if (botType === 'ai' && openaiKey) {
+            envContent += `OPENAI_API_KEY=${openaiKey}\n`;
+        }
+        await fs.writeFile(path.join(tempDir, '.env'), envContent);
+
+        // Создаем архив
+        const archive = archiver('zip', {
+            zlib: { level: 9 }
+        });
+
+        const zipPath = path.join(__dirname, 'temp', `${botName}.zip`);
+        const output = fs.createWriteStream(zipPath);
+
+        archive.pipe(output);
+        archive.directory(tempDir, false);
+        await archive.finalize();
+
+        // Отправляем архив
+        res.download(zipPath, `${botName}.zip`, async (err) => {
+            if (err) {
+                console.error('Ошибка при отправке файла:', err);
+            }
+            // Удаляем временные файлы
+            await fs.remove(tempDir);
+            await fs.remove(zipPath);
+        });
+
+    } catch (error) {
+        console.error('Ошибка при генерации бота:', error);
+        res.status(500).json({ error: 'Ошибка при создании бота' });
+    }
 });
 
-// Обработка данных из Web App
-bot.on(message('web_app_data'), async (ctx) => {
-  try {
-    const data = JSON.parse(ctx.message.web_app_data.data);
-    
-    // Здесь можно добавить сохранение данных в базу данных
-    console.log('Получены данные:', data);
-    
-    await ctx.reply(
-      '✅ Спасибо за ваше сообщение!\n\n' +
-      `Имя: ${data.name}\n` +
-      `Email: ${data.email}\n` +
-      `Сообщение: ${data.message}`
-    );
-  } catch (error) {
-    console.error('Ошибка обработки данных:', error);
-    await ctx.reply('❌ Произошла ошибка при обработке данных');
-  }
+// Обработка корневого маршрута
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Запуск Express сервера
+// Запускаем сервер
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Сервер запущен на порту ${PORT}`);
+    console.log(`Сервер запущен на порту ${PORT}`);
 });
 
-// Запуск бота
+// Запускаем бота
 bot.launch().then(() => {
-  console.log('Бот запущен!');
+    console.log('Бот запущен!');
 }).catch((err) => {
-  console.error('Ошибка запуска бота:', err);
+    console.error('Ошибка запуска бота:', err);
 });
 
 // Корректное завершение работы
 process.once('SIGINT', () => {
-  bot.stop('SIGINT');
-  process.exit(0);
+    bot.stop('SIGINT');
+    process.exit(0);
 });
 process.once('SIGTERM', () => {
-  bot.stop('SIGTERM');
-  process.exit(0);
+    bot.stop('SIGTERM');
+    process.exit(0);
 }); 

@@ -1,104 +1,82 @@
-import { Telegraf, session } from 'telegraf';
-import { message } from 'telegraf/filters';
+import { Telegraf } from 'telegraf';
+import { OpenAI } from 'openai';
 import dotenv from 'dotenv';
-import OpenAI from 'openai';
 
 dotenv.config();
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+    apiKey: process.env.OPENAI_API_KEY
 });
-
-// Используем сессии для хранения состояния
-bot.use(session());
 
 // Обработка команды /start
-bot.command('start', async (ctx) => {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: 'Задать вопрос', callback_data: 'ask_question' }],
-      [{ text: 'Помощь', callback_data: 'help' }]
-    ]
-  };
-  
-  await ctx.reply(
-    '👋 Привет! Я ИИ-ассистент.\n\n' +
-    'Я могу помочь вам с различными вопросами. ' +
-    'Просто нажмите кнопку "Задать вопрос" или напишите свой вопрос.',
-    { reply_markup: keyboard }
-  );
+bot.start((ctx) => {
+    ctx.reply('Привет! Я AI бот. Задайте мне любой вопрос, и я постараюсь на него ответить.');
 });
 
-// Обработка нажатий на inline кнопки
-bot.action('ask_question', async (ctx) => {
-  await ctx.reply('Напишите ваш вопрос, и я постараюсь на него ответить.');
+// Обработка команды /help
+bot.help((ctx) => {
+    ctx.reply(
+        'Доступные команды:\n' +
+        '/start - Начать общение\n' +
+        '/help - Показать это сообщение\n' +
+        '/clear - Очистить историю диалога\n\n' +
+        'Просто напишите ваш вопрос, и я отвечу на него.'
+    );
 });
 
-bot.action('help', async (ctx) => {
-  await ctx.reply(
-    '📋 Как пользоваться ботом:\n\n' +
-    '1. Нажмите "Задать вопрос" или просто напишите свой вопрос\n' +
-    '2. Дождитесь ответа от ИИ\n' +
-    '3. Задавайте уточняющие вопросы\n\n' +
-    '❗️ Ограничения:\n' +
-    '- Максимальная длина вопроса: 1000 символов\n' +
-    '- Ответ может занять некоторое время\n' +
-    '- Бот не хранит историю разговора'
-  );
+// Обработка команды /clear
+bot.command('clear', (ctx) => {
+    ctx.session = { messages: [] };
+    ctx.reply('История диалога очищена.');
 });
 
 // Обработка текстовых сообщений
-bot.on(message('text'), async (ctx) => {
-  try {
-    // Проверяем длину сообщения
-    if (ctx.message.text.length > 1000) {
-      await ctx.reply('❌ Сообщение слишком длинное. Максимальная длина - 1000 символов.');
-      return;
+bot.on('text', async (ctx) => {
+    try {
+        const userMessage = ctx.message.text;
+        
+        // Отправляем "печатает..." статус
+        await ctx.replyWithChatAction('typing');
+
+        // Получаем ответ от OpenAI
+        const completion = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [
+                {
+                    role: "system",
+                    content: "Вы - полезный ассистент, который отвечает на вопросы пользователя. Отвечайте кратко и по существу."
+                },
+                {
+                    role: "user",
+                    content: userMessage
+                }
+            ],
+            max_tokens: 1000,
+            temperature: 0.7
+        });
+
+        const response = completion.choices[0].message.content;
+        await ctx.reply(response);
+    } catch (error) {
+        console.error('Error:', error);
+        await ctx.reply('Извините, произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте позже.');
     }
+});
 
-    // Отправляем "печатает..."
-    await ctx.replyWithChatAction('typing');
-
-    // Получаем ответ от OpenAI
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "Вы - полезный ассистент, который отвечает на вопросы пользователя. " +
-                  "Отвечайте кратко и по существу. Используйте эмодзи для более дружелюбного общения."
-        },
-        {
-          role: "user",
-          content: ctx.message.text
-        }
-      ],
-      max_tokens: 500,
-      temperature: 0.7
-    });
-
-    const answer = completion.choices[0].message.content;
-
-    // Отправляем ответ
-    await ctx.reply(answer);
-
-  } catch (error) {
-    console.error('Ошибка при обработке сообщения:', error);
-    await ctx.reply(
-      '❌ Произошла ошибка при обработке вашего запроса.\n' +
-      'Пожалуйста, попробуйте еще раз позже.'
-    );
-  }
+// Обработка ошибок
+bot.catch((err, ctx) => {
+    console.error('Bot error:', err);
+    ctx.reply('Произошла ошибка. Пожалуйста, попробуйте позже.');
 });
 
 // Запуск бота
 bot.launch().then(() => {
-  console.log('ИИ-бот запущен!');
+    console.log('AI Bot started successfully');
 }).catch((err) => {
-  console.error('Ошибка запуска бота:', err);
+    console.error('Failed to start bot:', err);
 });
 
-// Корректное завершение работы
+// Включаем graceful shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM')); 
